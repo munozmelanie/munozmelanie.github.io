@@ -1,0 +1,10 @@
+.private/
+local-bundles/
+output/
+tmp/
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+.env*
+*.tsbuildinfo
