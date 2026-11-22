@@ -74,6 +74,10 @@ export function parseManifest(value) {
   return value;
 }
 export const parisDate = (now=new Date()) => {const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Paris',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now);return ['year','month','day'].map(type=>parts.find(p=>p.type===type).value).join('-');};
+export function defaultDate(manifest, now=new Date()) {
+  const today=parisDate(now);
+  return Object.keys(manifest.days).sort().find(date=>date>=today)||manifest.latestDate;
+}
 export function rememberExpiry(now=Date.now()) {
   const today=parisDate(new Date(now));
   let low=now,high=now+27*60*60*1000;
@@ -118,12 +122,12 @@ function startUI() {
     const paths={book:'M3 4c4-1 7 0 9 2 3-2 6-3 9-2v15c-4-1-7 0-9 2-3-2-6-3-9-2zM12 6v15',file:'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M8 13h8M8 17h6',download:'M12 3v12m-5-5 5 5 5-5M5 16v5h14v-5',clock:'M12 8v5l3 2M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0',print:'M6 9V3h12v6M6 17H3V9h18v8h-3M6 14h12v7H6z',screen:'M3 3h18v13H3zM12 16v5M7 21h10M10 7l5 3-5 3z',calendar:'M3 5h18v16H3zM7 2v6M17 2v6M3 10h18',check:'m5 12 4 4L19 6',refresh:'M20 7a9 9 0 1 0 1 9M20 3v5h-5',alert:'m12 3 10 18H2zM12 9v5m0 3v1',arrow:'M5 12h14m-5-5 5 5-5 5'};
     const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 24 24');svg.setAttribute('width',size);svg.setAttribute('height',size);svg.setAttribute('fill','none');svg.setAttribute('stroke','currentColor');svg.setAttribute('stroke-width','1.7');svg.setAttribute('stroke-linecap','round');svg.setAttribute('stroke-linejoin','round');svg.setAttribute('aria-hidden','true');const p=document.createElementNS(svg.namespaceURI,'path');p.setAttribute('d',paths[type]||paths.file);svg.append(p);return svg;
   };
-  const state={key:null,descriptor:null,manifest:null,selected:'',followingLatest:true,tab:'worksheet',checked:new Set(),generation:0,refreshing:false,cache:new Map(),cacheSize:0,rememberUntil:0,documentId:''};
+  const state={key:null,descriptor:null,manifest:null,selected:'',followingDefault:true,tab:'worksheet',checked:new Set(),generation:0,refreshing:false,cache:new Map(),cacheSize:0,rememberUntil:0,documentId:''};
   const status=(text,error=false)=>{$('login-status').textContent=text;$('login-status').classList.toggle('is-error',error);};
   const clearRemembered=()=>{try{localStorage.removeItem(STORAGE_KEY);}catch{}};
   const deepLink=()=>{const params=new URLSearchParams(location.hash.slice(1));return{date:validDate(params.get('date'))?params.get('date'):'',document:isId(params.get('document'))?params.get('document'):''};};
   function setHash(date,documentId='') {const p=new URLSearchParams();if(date)p.set('date',date);if(documentId)p.set('document',documentId);const hash=p.toString();history.replaceState(null,'',location.pathname+location.search+(hash?'#'+hash:''));}
-  function closeDocument() {if($('document-dialog').open)$('document-dialog').close();$('document-dialog').classList.remove('fallback-open');$('document-body').replaceChildren();state.documentId='';if(state.manifest)setHash(state.selected||state.manifest.latestDate);}
+  function closeDocument() {if($('document-dialog').open)$('document-dialog').close();$('document-dialog').classList.remove('fallback-open');$('document-body').replaceChildren();state.documentId='';if(state.manifest)setHash(state.followingDefault?'':state.selected);}
   function lock(message='') {
     state.generation++;closeDocument();state.key=null;state.descriptor=null;state.manifest=null;state.selected='';state.checked.clear();state.rememberUntil=0;
     for(const item of state.cache.values())URL.revokeObjectURL(item.url);state.cache.clear();state.cacheSize=0;
@@ -134,7 +138,7 @@ function startUI() {
     try {localStorage.setItem(STORAGE_KEY,JSON.stringify({version:1,key:toBase64(raw),expiresAt,date:parisDate(),fingerprint:keyFingerprint(descriptor)}));state.rememberUntil=expiresAt;}catch{status('Accès ouvert. Cet appareil ne permet pas de le garder en mémoire.');}
   }
   function reveal(manifest,descriptor,key) {
-    state.manifest=manifest;state.descriptor=descriptor;state.key=key;state.selected=deepLink().date||manifest.latestDate;state.followingLatest=!deepLink().date;
+    state.manifest=manifest;state.descriptor=descriptor;state.key=key;state.selected=deepLink().date||defaultDate(manifest);state.followingDefault=!deepLink().date;
     $('password').value='';$('access-panel').hidden=true;$('classroom').hidden=false;$('lock-button').hidden=false;render();
     const link=deepLink();if(link.document)void showDocument(link.document);
   }
@@ -163,15 +167,17 @@ function startUI() {
     } catch {clearRemembered();status('Entrez le mot de passe pour ouvrir la journée.');}
     finally {$('unlock-button').disabled=false;}
   }
-  async function refresh(latest=false) {
+  async function refresh(home=false) {
     if(!state.key || state.refreshing)return;state.refreshing=true;const generation=state.generation;
     try {
       const descriptor=await fetchDescriptor();if(generation!==state.generation)return;
       if(keyFingerprint(descriptor)!==keyFingerprint(state.descriptor)){lock('Le mot de passe a changé. Entrez le nouveau mot de passe.');return;}
       const changed=descriptor.manifest.path!==state.descriptor.manifest.path;
-      if(changed){const manifest=await openManifest(state.key,descriptor);if(generation!==state.generation)return;state.manifest=manifest;state.descriptor=descriptor;if(state.followingLatest){if(state.selected!==manifest.latestDate){closeDocument();state.checked.clear();}state.selected=manifest.latestDate;}}
-      if(latest){state.selected=state.manifest.latestDate;state.followingLatest=true;setHash(state.selected);state.checked.clear();}
-      if(changed||latest)render();
+      if(changed){const manifest=await openManifest(state.key,descriptor);if(generation!==state.generation)return;state.manifest=manifest;state.descriptor=descriptor;}
+      const selected=(home||state.followingDefault)?defaultDate(state.manifest):state.selected;
+      const dayChanged=selected!==state.selected;
+      if(home||dayChanged){closeDocument();state.selected=selected;state.followingDefault=true;setHash('');state.checked.clear();}
+      if(changed||home||dayChanged)render();
     } catch(error) {const target=$('refresh-status');if(target)target.textContent='La mise à jour n’a pas pu être vérifiée. Le dernier contenu chargé reste affiché.';}
     finally {state.refreshing=false;}
   }
@@ -188,11 +194,11 @@ function startUI() {
     const nav=el('nav','section-nav');nav.setAttribute('aria-label','Accès rapide');for(const [id,label,glyph] of [['journee','La journée','calendar'],['diaporama','Diaporama','screen'],['photocopies','Photocopies','print']]){const a=el('a','',label);a.href='#'+id;a.prepend(icon(glyph,17));a.addEventListener('click',e=>{e.preventDefault();document.getElementById(id)?.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion:reduce)').matches?'auto':'smooth'});});nav.append(a);}root.append(nav);
     const heading=el('section','day-heading');heading.id='journee';const title=append(el('div'),el('p','eyebrow text-muted','LA JOURNÉE PRÉPARÉE'),el('h2','',d?dateLabel(d.date):'Le programme de la classe'));
     if(d){const date=new Intl.DateTimeFormat('fr-FR',{day:'numeric',month:'long',hour:'2-digit',minute:'2-digit',timeZone:'Europe/Paris'}).format(new Date(d.updatedAt));title.append(append(el('p','updated'),icon('clock',13),document.createTextNode('Mis à jour le '+date)));}
-    const input=el('input');input.type='date';input.value=state.selected;input.setAttribute('aria-label','Consulter une autre date');input.addEventListener('change',()=>{if(!validDate(input.value))return;state.selected=input.value;state.followingLatest=false;state.checked.clear();setHash(input.value);render();});
-    const refreshButton=button('','icon-button',()=>void refresh(true));refreshButton.setAttribute('aria-label','Afficher la dernière préparation');refreshButton.title='Dernière préparation';refreshButton.append(icon('refresh'));
+    const input=el('input');input.type='date';input.value=state.selected;input.setAttribute('aria-label','Consulter une autre date');input.addEventListener('change',()=>{if(!validDate(input.value))return;state.selected=input.value;state.followingDefault=false;state.checked.clear();setHash(input.value);render();});
+    const refreshButton=button('','icon-button',()=>void refresh(true));refreshButton.setAttribute('aria-label','Afficher la journée du jour ou la prochaine journée préparée');refreshButton.title='Journée du jour ou prochaine journée préparée';refreshButton.append(icon('refresh'));
     const dateLabelNode=append(el('label','date-label'),icon('calendar',16),input);append(heading,title,append(el('div','date-actions'),dateLabelNode,refreshButton));root.append(heading);
     const refreshStatus=el('p','refresh-status');refreshStatus.id='refresh-status';refreshStatus.setAttribute('role','status');root.append(refreshStatus);
-    if(!d){root.append(append(el('div','alert'),icon('alert',20),append(el('div'),el('strong','','Aucune préparation disponible pour cette date.'),el('p','','Choisissez une autre date ou affichez la dernière préparation.'),button('Dernière préparation','text-button',()=>{state.selected=state.manifest.latestDate;state.followingLatest=true;setHash(state.selected);render();}))));return;}
+    if(!d){root.append(append(el('div','alert'),icon('alert',20),append(el('div'),el('strong','','Aucune préparation disponible pour cette date.'),el('p','','Choisissez une autre date ou revenez à la journée du jour ou à la prochaine journée préparée.'),button('Revenir à la journée','text-button',()=>{state.selected=defaultDate(state.manifest);state.followingDefault=true;setHash('');render();}))));return;}
     const stale=d.date<parisDate();if(stale||d.status!=='ready'){const body=append(el('div'),el('strong','',stale?'Cette préparation concerne une date passée.':d.status==='missing'?'La préparation est à venir.':'Une partie de la journée est prête.'),el('p','',d.intro));if(d.missing.length){const list=el('ul');for(const line of d.missing)list.append(el('li','',line));body.append(list);}root.append(append(el('div','alert'),icon('alert',20),body));}else root.append(append(el('p','ready-note'),icon('check'),document.createTextNode(d.intro||'La journée et ses supports sont prêts.')));
     const slides=d.documents.filter(x=>x.kind==='slides'),pack=d.documents.find(x=>x.path.toLowerCase().endsWith('.zip'));
     const feature=(kind,eyebrow,title,description,glyph)=>{const card=el('section',`feature-card ${kind}-card`);append(card,append(el('div','feature-icon'),icon(glyph,25)),append(el('div','feature-copy'),el('p','eyebrow',eyebrow),el('h3','',title),el('p','',description)));return card;};
@@ -235,7 +241,7 @@ function startUI() {
   }
   $('unlock-form').addEventListener('submit',unlock);$('lock-button').addEventListener('click',()=>lock());$('close-document').addEventListener('click',closeDocument);$('document-dialog').addEventListener('cancel',e=>{e.preventDefault();closeDocument();});
   $('show-password').addEventListener('click',()=>{const show=$('password').type==='password';$('password').type=show?'text':'password';$('show-password').textContent=show?'Masquer':'Afficher';$('show-password').setAttribute('aria-pressed',String(show));$('show-password').setAttribute('aria-label',show?'Masquer le mot de passe':'Afficher le mot de passe');});
-  window.addEventListener('hashchange',()=>{if(!state.manifest)return;const link=deepLink();if(link.date){state.selected=link.date;state.followingLatest=false;render();}if(link.document)void showDocument(link.document);else closeDocument();});
+  window.addEventListener('hashchange',()=>{if(!state.manifest)return;const link=deepLink();state.selected=link.date||defaultDate(state.manifest);state.followingDefault=!link.date;state.checked.clear();render();if(link.document)void showDocument(link.document);else closeDocument();});
   window.addEventListener('pagehide',()=>{closeDocument();for(const item of state.cache.values())URL.revokeObjectURL(item.url);state.cache.clear();state.cacheSize=0;});
   setInterval(()=>{if(state.rememberUntil&&Date.now()>=state.rememberUntil){lock('L’accès gardé sur cet appareil a expiré. Entrez à nouveau le mot de passe.');return;}if(!document.hidden)void refresh();},60000);
   document.addEventListener('visibilitychange',()=>{if(!document.hidden){if(state.rememberUntil&&Date.now()>=state.rememberUntil)lock('L’accès gardé sur cet appareil a expiré.');else void refresh();}});

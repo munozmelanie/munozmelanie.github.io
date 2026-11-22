@@ -4,6 +4,8 @@ Espace de remplacement disponible sur https://munozmelanie.github.io/.
 
 Le visiteur saisit le mot de passe indiqué sur le mémo de classe. Aucun compte n’est nécessaire. Le programme et les documents sont chiffrés avant leur publication ; le navigateur les déchiffre localement. Le mot de passe n’est pas envoyé à GitHub et n’est pas conservé dans ce dépôt.
 
+L’accueil affiche la préparation du jour (heure de Paris), ou la prochaine journée préparée. Publier plusieurs journées à l’avance ne masque donc pas celle du lendemain. Si toutes les préparations sont passées, la plus récente reste visible avec son avertissement. Le sélecteur de date et les liens vers une journée précise gardent leur choix explicite.
+
 Le dossier `public/` contient l’interface et les données chiffrées. GitHub Actions publie uniquement ce dossier. Les préparations originales, les dossiers de journée en clair et le mémo portant le mot de passe restent sur l’ordinateur de l’enseignante, hors du dépôt.
 
 ## Mise à jour
@@ -21,3 +23,5 @@ Les archives visibles sont limitées à quatorze jours. L’historique Git conse
 ## Vérification
 
 Les tests vérifient le chiffrement, le rejet d’un mauvais mot de passe ou d’un fichier altéré, la compatibilité Python/Web Crypto et la publication Git atomique. Les fonctionnalités du navigateur utilisent uniquement ses API standard, sans dépendance chargée depuis un site tiers.
+
+`node scripts/tests/test_default_date.mjs` vérifie la sélection de la journée, notamment les changements de date à minuit à Paris.
