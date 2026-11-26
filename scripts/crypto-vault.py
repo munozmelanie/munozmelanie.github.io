@@ -26,7 +26,9 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 ITERATIONS = 600_000
-MAX_FILE = 25 * 1024 * 1024
+# Embedded classroom videos can exceed 25 MiB. Keep ciphertext (including its
+# 16-byte authentication tag) below GitHub's 100 MiB per-file Git limit.
+MAX_FILE = 90 * 1024 * 1024
 MAX_DAY = 256 * 1024
 MAX_MANIFEST = 4 * 1024 * 1024
 DATA_PATTERN = re.compile(r"data/[0-9a-f]{64}\.bin\Z")

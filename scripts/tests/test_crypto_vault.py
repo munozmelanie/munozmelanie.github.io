@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("vault", ROOT / "scripts" / "crypto-vault.py")
@@ -109,6 +110,71 @@ class VaultTests(unittest.TestCase):
         (self.source / "day.json").write_text(json.dumps(invalid))
         with self.assertRaises(vault.VaultError):
             self.prepare()
+
+    def sparse_document(self, size):
+        """Use real file sizes without writing tens of MiB of padding."""
+        document = self.day["documents"][0]
+        source = self.source / "files" / document["path"]
+        with source.open("r+b") as stream:
+            stream.truncate(size)
+        document["sizeBytes"] = size
+        document.pop("sha256", None)
+        (self.source / "day.json").write_text(json.dumps(self.day))
+        return source
+
+    def test_bundle_larger_than_previous_25_mib_limit_is_accepted(self):
+        size = 26 * 1024 * 1024
+        self.sparse_document(size)
+        day, files = vault.load_bundle(self.source)
+        document, data = files[0]
+        self.assertEqual(len(data), size)
+        self.assertEqual(document["sizeBytes"], size)
+        self.assertEqual(document["sha256"], vault.digest(data))
+        self.assertEqual(day["documents"][0], document)
+
+    def test_bundle_90_mib_boundary_checked_before_reading_file(self):
+        self.assertEqual(vault.MAX_FILE, 90 * 1024 * 1024)
+        original_read = pathlib.Path.read_bytes
+
+        class ReachedFileRead(Exception):
+            pass
+
+        for size, accepted in ((vault.MAX_FILE, True), (vault.MAX_FILE + 1, False)):
+            with self.subTest(size=size):
+                source = self.sparse_document(size).resolve()
+                def read_bytes(path):
+                    if path == source:
+                        raise ReachedFileRead()
+                    return original_read(path)
+                # Real stat, document metadata and sparse size agree. Stop only
+                # after validation, before a needless 90 MiB read/hash.
+                with mock.patch.object(pathlib.Path, "read_bytes", read_bytes):
+                    if accepted:
+                        with self.assertRaises(ReachedFileRead):
+                            vault.load_bundle(self.source)
+                    else:
+                        with self.assertRaisesRegex(vault.VaultError, "Type ou taille"):
+                            vault.load_bundle(self.source)
+
+    def test_ciphertext_boundary_includes_authentication_tag(self):
+        path = self.public / "data" / ("a" * 64 + ".bin")
+        path.parent.mkdir(parents=True)
+
+        class ReachedCipherRead(Exception):
+            pass
+
+        for size, accepted in ((vault.MAX_FILE + 16, True), (vault.MAX_FILE + 17, False)):
+            with self.subTest(size=size):
+                with path.open("wb") as stream:
+                    stream.truncate(size)
+                descriptor = {"path": "data/" + path.name, "cipherSizeBytes": size}
+                with mock.patch.object(pathlib.Path, "read_bytes", side_effect=ReachedCipherRead):
+                    if accepted:
+                        with self.assertRaises(ReachedCipherRead):
+                            vault.read_cipher(self.public, descriptor, "cipherSizeBytes")
+                    else:
+                        with self.assertRaisesRegex(vault.VaultError, "Taille du fichier chiffré"):
+                            vault.read_cipher(self.public, descriptor, "cipherSizeBytes")
 
     def test_webcrypto_interoperability_and_unicode_nfc(self):
         self.prepare()
